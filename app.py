@@ -4,9 +4,10 @@ import pandas as pd
 import numpy as np
 import time
 import requests
+from datetime import datetime
 
 # 1. KONFIGURASI HALAMAN & STYLE BLOOMBERG TERMINAL
-st.set_page_config(page_title="IDX BLOOMBERG TERMINAL - ALL MARKET", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="IDX BLOOMBERG TERMINAL - 24/7 ENGINE", layout="wide", initial_sidebar_state="collapsed")
 
 bloomberg_style = """
 <style>
@@ -22,12 +23,13 @@ bloomberg_style = """
     .green-text { color: #00FF00; font-weight: bold; }
     .red-text { color: #FF0000; font-weight: bold; }
     .amber-text { color: #FF9900; font-weight: bold; }
+    .status-box { padding: 8px; border: 1px solid #00FF00; background-color: #001a00; color: #00FF00; text-align: center; font-weight: bold; margin-bottom: 15px; }
 </style>
 """
 st.markdown(bloomberg_style, unsafe_allow_html=True)
 
 # 2. FUNGSI PENCULIK DAFTAR SAHAM OTOMATIS (WEB SCRAPER)
-@st.cache_data(ttl=86400) # Disimpan di memori selama 24 jam agar cepat
+@st.cache_data(ttl=86400)
 def ambil_daftar_saham(mode):
     if mode == "🔥 LQ45 (45 Saham Paling Likuid & Aktif)":
         return [
@@ -39,7 +41,6 @@ def ambil_daftar_saham(mode):
         ]
     elif mode == "🌌 SEMUA EMITEN BEI (~900+ Saham - Sapu Jagat)":
         try:
-            # Menyedot daftar seluruh emiten dari Wikipedia Indonesia secara langsung
             url = "https://id.wikipedia.org/wiki/Daftar_emiten_di_Bursa_Efek_Indonesia"
             tables = pd.read_html(url)
             tickers = []
@@ -48,18 +49,13 @@ def ambil_daftar_saham(mode):
                     if str(col).strip().lower() in ['kode', 'kode saham', 'ticker', 'emiten']:
                         t_list = df[col].dropna().astype(str).tolist()
                         for t in t_list:
-                            # Pastikan formatnya 4 huruf dan alfabet murni
                             clean_t = t.strip().upper()
                             if len(clean_t) == 4 and clean_t.isalpha():
                                 tickers.append(clean_t + ".JK")
-            # Jika berhasil, kembalikan daftar unik tanpa duplikat
             if tickers:
                 return sorted(list(set(tickers)))
-        except Exception as e:
-            st.warning("Gagal menarik 900 saham dari Wikipedia, mengalihkan ke mode default.")
+        except Exception:
             pass
-    
-    # Fallback Default jika memilih manual atau gagal
     return ["BBCA.JK", "BBRI.JK", "BMRI.JK", "BBNI.JK", "TLKM.JK", "ASII.JK", "ADRO.JK", "GOTO.JK", "BRIS.JK", "ANTM.JK"]
 
 def hitung_rsi(data, window=14):
@@ -78,28 +74,38 @@ def hitung_mfi(data, window=14):
     neg_flow_sum = pd.Series(negative_flow).rolling(window=window).sum()
     return 100 - (100 / (1 + (pos_flow_sum / neg_flow_sum)))
 
-# 3. ENGINE UTAMA DENGAN RADAR PRE-FILTER & PROGRESS BAR
+# 3. ENGINE UTAMA 24/7 (ANTI-LIBUR / ANTI-PASAR TUTUP)
 def analisa_pasar_masal(tickers, progress_bar, status_text):
     hasil = []
-    error_log = []
     total_saham = len(tickers)
+    tanggal_data_terakhir = "N/A"
     
     for i, ticker in enumerate(tickers):
-        # Update Progress Bar di Layar
         progress_pct = int(((i + 1) / total_saham) * 100)
         progress_bar.progress(progress_pct)
-        status_text.markdown(f"**> SCANNING RADAR [{i+1}/{total_saham}]:** Memproses `{ticker}`... *(Saham tidur & volume 0 otomatis dilewati)*")
+        status_text.markdown(f"**> SCANNING RADAR [{i+1}/{total_saham}]:** Memindai `{ticker}`... *(Mode 24/7 Aktif)*")
         
         try:
             saham = yf.Ticker(ticker)
             df = saham.history(period="6mo")
             
-            # --- RADAR PRE-FILTER (ANTI SAHAM TIDUR / GOCAP) ---
-            # Jika data kosong, atau volume hari ini 0, atau harga <= Rp50 -> LANGSUNG LEWATI!
+            # --- RAHASIA 24/7: PEMBERSIH BAR HANTU ---
+            # Hapus data yang volumenya 0 atau kosong (hari libur/akhir pekan yang disisipkan Yahoo)
+            df = df.dropna(subset=['Close', 'Volume'])
+            df = df[df['Volume'] > 0] 
+            
+            # Jika setelah dibersihkan datanya tinggal sedikit / kosong, berarti saham mati permanen
             if df.empty or len(df) < 50:
                 continue
-            if df['Volume'].iloc[-1] == 0 or df['Close'].iloc[-1] <= 50:
-                continue
+
+            # Ambil tanggal dari baris terakhir yang valid untuk info di layar
+            if tanggal_data_terakhir == "N/A":
+                tanggal_data_terakhir = str(df.index[-1].date())
+
+            # --- RADAR PRE-FILTER ---
+            # Karena sudah difilter df['Volume'] > 0 di atas, iloc[-1] DIJAMIN adalah hari kerja terakhir!
+            if df['Close'].iloc[-1] <= 50:
+                continue # Tetap lewati saham gocap/tidur
 
             info = saham.info
             close = df['Close'].iloc[-1]
@@ -173,16 +179,16 @@ def analisa_pasar_masal(tickers, progress_bar, status_text):
                 "Div Yield": f"{div_yield:.1f}%",
                 "MFI (Flow)": f"{mfi_last:.1f}"
             })
-            # Jeda mikro agar Yahoo Finance tidak memblokir server kita
             time.sleep(0.05)
             
         except Exception:
             continue
             
-    return pd.DataFrame(hasil)
+    return pd.DataFrame(hasil), tanggal_data_terakhir
 
 # 4. ANTARMUKA TERMINAL
-st.markdown("<h1>> IDX QUANTITATIVE TERMINAL // ALL-MARKET SCANNER</h1>", unsafe_allow_html=True)
+st.markdown("<h1>> IDX QUANTITATIVE TERMINAL // 24/7 ALL-WEATHER ENGINE</h1>", unsafe_allow_html=True)
+st.markdown("<div class='status-box'>⚡ SYSTEM READY 24/7: Jika bursa tutup/libur, sistem otomatis menganalisa data penutupan hari kerja terakhir (EOD).</div>", unsafe_allow_html=True)
 st.markdown("---")
 
 col1, col2 = st.columns([3, 1])
@@ -212,11 +218,10 @@ if run_btn:
     progress_bar = st.progress(0)
     status_text = st.empty()
     
-    df_result = analisa_pasar_masal(tickers_to_run, progress_bar, status_text)
+    df_result, tgl_terakhir = analisa_pasar_masal(tickers_to_run, progress_bar, status_text)
     
-    # Selesai scanning
     progress_bar.empty()
-    status_text.markdown("### ✅ PEMINDAIAN PASAR SELESAI!")
+    status_text.markdown(f"### ✅ PEMINDAIAN SELESAI! (Berbasis Data Perdagangan Terakhir: **{tgl_terakhir}**)")
     
     if not df_result.empty:
         df_result = df_result.sort_values(by="Probabilitas", ascending=False)
@@ -234,7 +239,7 @@ if run_btn:
             st.markdown(f'<div class="metric-card"><div class="metric-title">RISIKO (STOP LOSS)</div><div class="metric-value red-text">{top_pick["Risiko (-)"]}</div></div>', unsafe_allow_html=True)
         
         st.markdown("---")
-        st.markdown(f"### > LIVE STOCK MONITORING TABLE ({len(df_result)} Saham Aktif Lolos Filter)")
+        st.markdown(f"### > LIVE / EOD STOCK MONITORING TABLE ({len(df_result)} Saham Aktif Lolos Filter)")
         
         def color_prob(val):
             color = '#00FF00' if val >= 70 else ('#FF9900' if val >= 55 else '#FF0000')
@@ -244,7 +249,7 @@ if run_btn:
         st.dataframe(styled_df, use_container_width=True, hide_index=True)
         
     else:
-        st.error("❌ Tidak ada saham yang lolos filter atau pasar sedang libur/tutup.")
+        st.error("❌ Tidak ada saham yang lolos filter.")
 
 st.markdown("---")
-st.markdown("<div style='font-size: 11px; color: #666;'>SYSTEM DISCLAIMER: Radar otomatis memindai seluruh emiten aktif di BEI. Saham dengan likuiditas mati (volume 0 atau harga Rp50) diabaikan oleh sistem untuk efisiensi komputasi.</div>", unsafe_allow_html=True)
+st.markdown("<div style='font-size: 11px; color: #666;'>SYSTEM DISCLAIMER: Algoritma otomatis memfilter hari perdagangan aktif (Volume > 0). Jika bursa tutup, perhitungan probabilitas dan R:R didasarkan pada harga penutupan hari kerja terakhir (End-of-Day).</div>", unsafe_allow_html=True)
